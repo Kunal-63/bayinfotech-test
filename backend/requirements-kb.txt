@@ -1,0 +1,2 @@
+# Add python-frontmatter for KB document parsing
+python-frontmatter==1.1.0
