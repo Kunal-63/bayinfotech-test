@@ -197,7 +197,11 @@ Similarity: {doc['similarity']:.2f}
             chunk_info = ""
             if "chunk_index" in doc_metadata:
                 chunk_index = doc_metadata.get("chunk_index", "")
-                chunk_info = f" (Chunk {chunk_index.split('/')[0]})"
+                if isinstance(chunk_index, str):
+                    chunk_num = chunk_index.split('/')[0]
+                else:
+                    chunk_num = str(chunk_index)
+                chunk_info = f" (Chunk {chunk_num})"
             
             references.append({
                 "id": kb_id,
