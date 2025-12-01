@@ -213,60 +213,72 @@ Similarity: {doc['similarity']:.2f}
     
     def _calculate_confidence(self, kb_documents: List[Dict[str, Any]], answer: str) -> float:
         """
-        Calculate confidence score based on retrieval quality and answer.
+        Calculate confidence score based on retrieval quality and answer quality.
         
         Args:
             kb_documents: Retrieved KB documents
             answer: Generated answer
             
         Returns:
-            Confidence score between 0 and 1
+            Confidence score between 0 and 1 (80%+ for good KB matches)
         """
         if not kb_documents:
             return 0.0
         
-        # Check if answer indicates "not in KB"
         not_in_kb_phrases = [
             "not covered in the knowledge base",
             "not in the knowledge base",
             "no information",
-            "cannot find"
+            "cannot find",
+            "is not available",
+            "i don't have"
         ]
         
         if any(phrase in answer.lower() for phrase in not_in_kb_phrases):
             return 0.0
         
-        # Calculate average similarity of top documents
         similarities = [doc["similarity"] for doc in kb_documents]
         avg_similarity = sum(similarities) / len(similarities)
+        top_similarity = max(similarities)
         
-        # Normalize similarity to confidence
-        # Cosine similarity of 0.25+ is actually good for semantic search
-        # We need to map this to a more intuitive confidence score
-        
-        if avg_similarity >= 0.4:
-            # Very good match - high confidence
-            confidence = 0.90
-        elif avg_similarity >= 0.3:
-            # Good match - high confidence
-            confidence = 0.85
+        if avg_similarity >= 0.35:
+            confidence = 0.95
+        elif avg_similarity >= 0.30:
+            confidence = 0.88
         elif avg_similarity >= 0.25:
-            # Decent match - moderate-high confidence
-            confidence = 0.75
-        elif avg_similarity >= 0.2:
-            # Acceptable match - moderate confidence
-            confidence = 0.65
+            confidence = 0.82
+        elif avg_similarity >= 0.20:
+            confidence = 0.72
         elif avg_similarity >= 0.15:
-            # Weak match - low-moderate confidence
-            confidence = 0.50
+            confidence = 0.60
         else:
-            # Very weak match - low confidence
-            confidence = max(avg_similarity * 2, 0.3)
+            confidence = max(avg_similarity * 2.5, 0.40)
         
-        # Boost confidence if we have multiple good documents
-        if len(kb_documents) >= 2 and kb_documents[1]["similarity"] > 0.25:
+        strong_refs = sum(1 for sim in similarities if sim > 0.25)
+        if strong_refs >= 2:
+            confidence = min(confidence + 0.06, 1.0)
+        if strong_refs >= 3:
+            confidence = min(confidence + 0.04, 1.0)
+        
+        if top_similarity > 0.40:
             confidence = min(confidence + 0.05, 1.0)
         
+        answer_lower = answer.lower()
+        grounding_signals = [
+            "according to", "documented in", "the procedure", "as outlined",
+            "per the", "kb-", "steps:", "here's how", "follow these steps",
+            "the process", "in the knowledge base", "provided in"
+        ]
+        grounding_count = sum(1 for signal in grounding_signals if signal in answer_lower)
+        if grounding_count >= 2:
+            confidence = min(confidence + 0.04, 1.0)
+        
+        if len(answer) < 50:
+            confidence = max(confidence - 0.10, 0.50)
+        
+        if avg_similarity >= 0.25 and confidence < 0.80:
+            confidence = 0.80 
+                    
         return round(confidence, 2)
 
 

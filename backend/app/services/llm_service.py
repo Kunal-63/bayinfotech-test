@@ -42,16 +42,27 @@ class OpenAIProvider(LLMProvider):
             {"role": "system", "content": system_prompt}
         ]
         
-        # Add conversation history
         messages.extend(conversation_history)
         
-        # Add KB context and current message
-        user_prompt = f"""Knowledge Base Context:
+        user_prompt = f"""
+KNOWLEDGE BASE CONTEXT:
 {kb_context}
 
-User Question: {user_message}
+USER QUESTION: {user_message}
 
-Instructions: Answer the user's question using ONLY the information provided in the Knowledge Base Context above. If the information is not in the context, explicitly state "This information is not covered in the knowledge base." Do not make up information or use external knowledge."""
+INSTRUCTIONS:
+1. Answer using ONLY the Knowledge Base context provided above
+2. If information IS available in KB:
+   - Provide a clear, complete answer grounded in the KB
+   - Include step-by-step guidance when applicable
+   - Reference the KB article IDs mentioned in the context
+   - Use structured formatting (steps, lists, code blocks as needed)
+3. If information is NOT available in KB:
+   - Explicitly state: "This information is not covered in the knowledge base"
+   - Do NOT make up information or use external knowledge
+   - Suggest escalation to support specialist
+
+Remember: You can ONLY use information from the Knowledge Base Context above."""
         
         messages.append({"role": "user", "content": user_prompt})
         
@@ -98,20 +109,33 @@ class AnthropicProvider(LLMProvider):
                 "content": msg["content"]
             })
         
-        # Add KB context and current message
-        user_prompt = f"""Knowledge Base Context:
+        # Add KB context and current message with improved prompt
+        user_prompt = f"""
+KNOWLEDGE BASE CONTEXT:
 {kb_context}
 
-User Question: {user_message}
+USER QUESTION: {user_message}
 
-Instructions: Answer the user's question using ONLY the information provided in the Knowledge Base Context above. If the information is not in the context, explicitly state "This information is not covered in the knowledge base." Do not make up information or use external knowledge."""
+INSTRUCTIONS:
+1. Answer using ONLY the Knowledge Base context provided above
+2. If information IS available in KB:
+   - Provide a clear, complete answer grounded in the KB
+   - Include step-by-step guidance when applicable
+   - Reference the KB article IDs mentioned in the context
+   - Use structured formatting (steps, lists, code blocks as needed)
+3. If information is NOT available in KB:
+   - Explicitly state: "This information is not covered in the knowledge base"
+   - Do NOT make up information or use external knowledge
+   - Suggest escalation to support specialist
+
+Remember: You can ONLY use information from the Knowledge Base Context above."""
         
         messages.append({"role": "user", "content": user_prompt})
         
         try:
             response = await self.client.messages.create(
                 model=self.model,
-                max_tokens=4096,  # Anthropic requires max_tokens, using high limit
+                max_tokens=4096,  
                 temperature=0.0,  # Deterministic responses for consistency
                 system=system_prompt,
                 messages=messages
