@@ -11,6 +11,7 @@ from app.models.enums import Tier, Severity
 from app.services.guardrail_service import GuardrailService
 from app.services.tier_service import TierService
 from app.services.rag_service import RAGService
+from app.services.response_validator import ResponseValidator
 from app.utils.db import get_db
 from app.utils.logger import get_logger
 
@@ -21,6 +22,7 @@ router = APIRouter()
 guardrail_service = GuardrailService()
 tier_service = TierService()
 rag_service = RAGService()
+response_validator = ResponseValidator()
 
 # Namespace for generating UUIDs from session IDs
 SESSION_NAMESPACE = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
@@ -148,8 +150,8 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                message_preview=request.message[:100])
     
     try:
-        # Step 1: Check guardrails
-        is_blocked, trigger_type, severity, reason = guardrail_service.check_guardrails(request.message)
+        # Step 1: Check guardrails (now with semantic detection)
+        is_blocked, trigger_type, severity, reason = await guardrail_service.check_guardrails(request.message)
         
         if is_blocked:
             # Log guardrail event
@@ -199,6 +201,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         # Step 3: Get conversation history
         conversation_history = _get_conversation_history(db, conversation.id)
         
+        
         # Step 4: Execute RAG pipeline
         answer, kb_references, confidence, has_kb_coverage = await rag_service.retrieve_and_generate(
             user_message=request.message,
@@ -206,14 +209,36 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             conversation_history=conversation_history
         )
         
-        # Step 5: Classify tier and severity
-        tier, severity, needs_escalation = tier_service.classify_tier_and_severity(
-            message=request.message,
-            user_role=request.user_role,
-            context=request.context.model_dump(),
-            kb_coverage=has_kb_coverage,
-            repeated_failure=_check_repeated_failure(conversation_history, request.message)
+        # Step 4.5: Validate response for policy compliance
+        is_valid, violation_type, safe_replacement = response_validator.validate_response(
+            response=answer,
+            user_message=request.message,
+            kb_references=kb_references,
+            confidence=confidence
         )
+        
+        if not is_valid:
+            logger.warning("response_validation_failed",
+                          session_id=request.session_id,
+                          violation_type=violation_type)
+            # Replace with safe response
+            answer = safe_replacement
+            confidence = 0.0
+            needs_escalation = True
+            tier = Tier.TIER_3
+            severity = Severity.HIGH
+        else:
+            # Sanitize response to remove any sensitive info
+            answer = response_validator.sanitize_response(answer)
+            
+            # Step 5: Classify tier and severity
+            tier, severity, needs_escalation = tier_service.classify_tier_and_severity(
+                message=request.message,
+                user_role=request.user_role,
+                context=request.context.model_dump(),
+                kb_coverage=has_kb_coverage,
+                repeated_failure=_check_repeated_failure(conversation_history, request.message)
+            )
         
         # Step 5.5: Create ticket if escalation needed
         ticket_id = None
