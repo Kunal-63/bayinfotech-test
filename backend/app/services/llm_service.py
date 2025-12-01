@@ -59,7 +59,7 @@ Instructions: Answer the user's question using ONLY the information provided in 
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=0.0  # Deterministic responses for consistency
+                temperature=0.0  
             )
             
             answer = response.choices[0].message.content

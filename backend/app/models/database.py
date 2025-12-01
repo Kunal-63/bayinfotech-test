@@ -43,14 +43,23 @@ class Message(Base):
 
 
 class KBDocument(Base):
-    """Knowledge base document model."""
+    """Knowledge base document/chunk model.
+    
+    Now supports both full documents and chunks. Each chunk stores:
+    - content: chunk text
+    - chunk_index: which chunk this is (0-based) or None for full doc
+    - chunk_count: total chunks in document or None for full doc
+    - original_doc_title: original document title (same for all chunks of same doc)
+    """
     __tablename__ = "kb_documents"
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     title = Column(String(500), nullable=False)
     content = Column(Text, nullable=False)
     embedding = Column(JSON)  # Stored as JSON array for SQLite
-    doc_metadata = Column(JSON, default={})  # version, timestamp, tags, tier, severity
+    doc_metadata = Column(JSON, default={})  # version, timestamp, tags, tier, severity, chunk_index, chunk_count
+    chunk_index = Column(String(10), nullable=True)  # e.g., "0/10" or None for full doc
+    original_doc_id = Column(String(36), nullable=True)  # reference to parent doc if this is a chunk
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

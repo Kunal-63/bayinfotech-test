@@ -1,4 +1,4 @@
-"""Knowledge base document ingestion script."""
+"""Knowledge base document ingestion script with chunking support."""
 import os
 import sys
 import asyncio
@@ -13,6 +13,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from app.models.database import Base, KBDocument
 from app.services.embedding_service import EmbeddingService
+from app.utils.chunking import DocumentChunker
 from app.utils.config import settings
 from app.utils.logger import setup_logging, get_logger
 
@@ -21,14 +22,23 @@ logger = get_logger(__name__)
 
 
 class KBIngestion:
-    """Knowledge base document ingestion system."""
+    """Knowledge base document ingestion system with sliding window chunking."""
     
-    def __init__(self):
-        """Initialize ingestion system."""
+    def __init__(self, chunk_size: int = 512, chunk_overlap: int = 100, chunking_strategy: str = "sliding_window"):
+        """Initialize ingestion system.
+        
+        Args:
+            chunk_size: Size of each chunk in words (tokens)
+            chunk_overlap: Number of overlapping words between consecutive chunks
+            chunking_strategy: Strategy to use ("sliding_window", "semantic", "sentence")
+        """
         self.embedding_service = EmbeddingService()
         self.engine = create_engine(settings.database_url)
         self.SessionLocal = sessionmaker(bind=self.engine)
         self.kb_dir = Path(__file__).parent / "documents"
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.chunking_strategy = chunking_strategy
     
     def create_tables(self):
         """Create database tables."""
@@ -64,7 +74,7 @@ class KBIngestion:
             db.close()
     
     async def _ingest_document(self, db, file_path: Path):
-        """Ingest a single KB document."""
+        """Ingest a single KB document with chunking."""
         try:
             # Parse markdown with frontmatter manually
             import yaml
@@ -103,20 +113,35 @@ class KBIngestion:
                 logger.info("kb_document_exists_skipping", kb_id=kb_id)
                 return
             
-            # Generate embedding for content
-            logger.info("generating_embedding", kb_id=kb_id)
-            embedding = await self.embedding_service.generate_embedding(content)
-            
-            # Create KB document
-            kb_doc = KBDocument(
+            # Chunk the document
+            chunks = DocumentChunker.chunk_document(
                 title=title,
                 content=content,
-                embedding=embedding,
-                doc_metadata=doc_metadata
+                doc_metadata=doc_metadata,
+                chunk_size=self.chunk_size,
+                overlap=self.chunk_overlap,
+                strategy=self.chunking_strategy
             )
             
-            db.add(kb_doc)
-            logger.info("kb_document_ingested", kb_id=kb_id, title=title)
+            logger.info("document_chunked", kb_id=kb_id, chunk_count=len(chunks))
+            
+            # Ingest each chunk
+            for chunk_idx, chunk in enumerate(chunks):
+                logger.info("generating_embedding_for_chunk", kb_id=kb_id, chunk_index=chunk_idx)
+                embedding = await self.embedding_service.generate_embedding(chunk["content"])
+                
+                # Create KB document chunk
+                kb_doc = KBDocument(
+                    title=f"{title} [Chunk {chunk_idx + 1}/{len(chunks)}]",
+                    content=chunk["content"],
+                    embedding=embedding,
+                    doc_metadata=chunk["doc_metadata"],
+                    chunk_index=f"{chunk_idx}/{len(chunks) - 1}"
+                )
+                
+                db.add(kb_doc)
+            
+            logger.info("kb_document_ingested_with_chunks", kb_id=kb_id, chunk_count=len(chunks))
             
         except Exception as e:
             logger.error("kb_document_ingestion_failed",
@@ -125,7 +150,7 @@ class KBIngestion:
             raise
     
     async def reindex_all(self):
-        """Reindex all existing KB documents (regenerate embeddings)."""
+        """Reindex all existing KB documents (regenerate embeddings from chunks)."""
         logger.info("kb_reindexing_started")
         
         db = self.SessionLocal()
@@ -134,7 +159,7 @@ class KBIngestion:
             logger.info("kb_documents_to_reindex", count=len(documents))
             
             for doc in documents:
-                logger.info("reindexing_document", kb_id=doc.doc_metadata.get('kb_id'))
+                logger.info("reindexing_document", title=doc.title)
                 embedding = await self.embedding_service.generate_embedding(doc.content)
                 doc.embedding = embedding
             

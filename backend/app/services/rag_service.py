@@ -25,7 +25,7 @@ class RAGService:
         user_message: str,
         db: Session,
         conversation_history: List[Dict[str, str]] = None,
-        top_k: int = 3
+        top_k: int = 5
     ) -> Tuple[str, List[Dict[str, Any]], float, bool]:
         """
         Execute RAG pipeline: retrieve relevant KB chunks and generate response.
@@ -34,7 +34,7 @@ class RAGService:
             user_message: User's question
             db: Database session
             conversation_history: Previous conversation turns
-            top_k: Number of KB documents to retrieve
+            top_k: Number of KB chunks to retrieve (now retrieving chunks, not whole docs)
             
         Returns:
             Tuple of (answer, kb_references, confidence, has_kb_coverage)
@@ -43,12 +43,12 @@ class RAGService:
         logger.info("rag_retrieval_started", message_preview=user_message[:100])
         query_embedding = await self.embedding_service.generate_embedding(user_message)
         
-        # Step 2: Retrieve relevant KB documents using vector similarity
-        kb_documents = self._retrieve_similar_documents(db, query_embedding, top_k)
+        # Step 2: Retrieve relevant KB chunks using vector similarity
+        kb_chunks = self._retrieve_similar_documents(db, query_embedding, top_k)
         
         # Step 3: Check if we have KB coverage
         # Note: Cosine similarity of 0.25+ is good for semantic search
-        has_kb_coverage = len(kb_documents) > 0 and kb_documents[0]["similarity"] > 0.25
+        has_kb_coverage = len(kb_chunks) > 0 and kb_chunks[0]["similarity"] > 0.25
         
         if not has_kb_coverage:
             logger.warning("no_kb_coverage", message_preview=user_message[:100])
@@ -59,8 +59,8 @@ class RAGService:
                 False
             )
         
-        # Step 4: Build KB context from retrieved documents
-        kb_context = self._build_kb_context(kb_documents)
+        # Step 4: Build KB context from retrieved chunks (deduplicating by original doc)
+        kb_context = self._build_kb_context(kb_chunks)
         
         # Step 5: Generate grounded response using LLM
         answer = await self.llm_service.generate_grounded_response(
@@ -69,13 +69,14 @@ class RAGService:
             conversation_history=conversation_history or []
         )
         
-        # Step 6: Extract KB references from retrieved documents
-        kb_references = self._extract_kb_references(kb_documents)
+        # Step 6: Extract KB references from retrieved chunks
+        kb_references = self._extract_kb_references(kb_chunks)
         
         # Step 7: Calculate confidence score
-        confidence = self._calculate_confidence(kb_documents, answer)
+        confidence = self._calculate_confidence(kb_chunks, answer)
         
         logger.info("rag_generation_completed",
+                   kb_chunks_count=len(kb_chunks),
                    kb_references_count=len(kb_references),
                    confidence=confidence,
                    has_kb_coverage=has_kb_coverage)
@@ -175,19 +176,32 @@ Similarity: {doc['similarity']:.2f}
         return "\n".join(context_parts)
     
     def _extract_kb_references(self, kb_documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Extract KB references from retrieved documents."""
+        """Extract KB references from retrieved chunks, deduplicating by original document."""
         references = []
+        seen_titles = set()
         
         for doc in kb_documents:
             doc_metadata = doc.get("doc_metadata", {})
+            original_title = doc_metadata.get("original_doc_title", doc["title"])
             kb_id = doc_metadata.get("kb_id", f"KB-{doc['id'][:8]}")
+            
+            # Deduplicate by original document title (avoid showing same doc multiple times)
+            if original_title in seen_titles:
+                continue
+            seen_titles.add(original_title)
             
             # Get excerpt (first 200 chars of content)
             excerpt = doc["content"][:200] + "..." if len(doc["content"]) > 200 else doc["content"]
             
+            # Add chunk info if available
+            chunk_info = ""
+            if "chunk_index" in doc_metadata:
+                chunk_index = doc_metadata.get("chunk_index", "")
+                chunk_info = f" (Chunk {chunk_index.split('/')[0]})"
+            
             references.append({
                 "id": kb_id,
-                "title": doc["title"],
+                "title": original_title + chunk_info,
                 "excerpt": excerpt
             })
         
