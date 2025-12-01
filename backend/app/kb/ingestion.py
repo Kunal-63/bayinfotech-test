@@ -46,6 +46,35 @@ class KBIngestion:
         Base.metadata.create_all(bind=self.engine)
         logger.info("database_tables_created")
     
+    def clear_kb_documents(self):
+        """Delete all existing KB documents from the database."""
+        logger.info("clearing_kb_documents")
+        db = self.SessionLocal()
+        try:
+            count = db.query(KBDocument).delete()
+            db.commit()
+            logger.info("kb_documents_cleared", deleted_count=count)
+            return count
+        except Exception as e:
+            logger.error("kb_clear_failed", error=str(e))
+            db.rollback()
+            raise
+        finally:
+            db.close()
+    
+    async def ingest_new(self):
+        """Clear old KB documents and ingest new ones."""
+        logger.info("ingest_new_started")
+        
+        # Step 1: Clear old documents
+        deleted = self.clear_kb_documents()
+        logger.info("old_documents_deleted", count=deleted)
+        
+        # Step 2: Ingest new documents
+        await self.ingest_documents()
+        
+        logger.info("ingest_new_completed")
+    
     async def ingest_documents(self):
         """Ingest all KB documents from the documents directory."""
         logger.info("kb_ingestion_started", directory=str(self.kb_dir))
@@ -182,9 +211,13 @@ async def main():
     parser.add_argument('--create-tables', action='store_true',
                        help='Create database tables')
     parser.add_argument('--ingest', action='store_true',
-                       help='Ingest KB documents')
+                       help='Ingest KB documents (appends to existing)')
+    parser.add_argument('--ingest-new', action='store_true',
+                       help='Clear old KB documents and ingest new ones')
     parser.add_argument('--reindex', action='store_true',
                        help='Reindex all documents')
+    parser.add_argument('--clear', action='store_true',
+                       help='Clear all KB documents from database')
     
     args = parser.parse_args()
     
@@ -196,11 +229,23 @@ async def main():
     if args.ingest:
         await ingestion.ingest_documents()
     
+    if args.ingest_new:
+        await ingestion.ingest_new()
+    
+    if args.clear:
+        ingestion.clear_kb_documents()
+    
     if args.reindex:
         await ingestion.reindex_all()
     
-    if not (args.create_tables or args.ingest or args.reindex):
-        print("Usage: python -m app.kb.ingestion [--create-tables] [--ingest] [--reindex]")
+    if not (args.create_tables or args.ingest or args.ingest_new or args.reindex or args.clear):
+        print("Usage: python -m app.kb.ingestion [--create-tables] [--ingest] [--ingest-new] [--reindex] [--clear]")
+        print("\nOptions:")
+        print("  --create-tables    Create database tables")
+        print("  --ingest           Ingest KB documents (appends to existing)")
+        print("  --ingest-new       Clear old documents and ingest new ones")
+        print("  --reindex          Regenerate embeddings for all documents")
+        print("  --clear            Delete all KB documents")
 
 
 if __name__ == "__main__":

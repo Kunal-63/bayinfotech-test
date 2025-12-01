@@ -82,6 +82,6 @@ echo ✅ Setup complete!
 echo.
 echo 🚀 To start the server, run:
 echo    uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-echo    python -m app.kb.ingestion --ingest
+echo    python -m app.kb.ingestion --ingest-new 
 echo 📖 API documentation will be available at:
 echo    http://localhost:8000/docs
